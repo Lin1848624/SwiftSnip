@@ -1,0 +1,7 @@
+build/
+*.user
+*.suo
+.vs/
+*.log
+selftest*.png
+

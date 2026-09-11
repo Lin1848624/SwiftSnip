@@ -1,0 +1,108 @@
+# 瞬截 / SwiftSnip
+
+Windows 10 轻量截图工具：常驻系统托盘，全局快捷键唤起，支持鼠标框选区域截图与全屏截图，自动保存 PNG。
+纯 Win32 C++ 实现，无第三方依赖，单个 exe 约 220 KB。
+
+## 功能
+
+- **区域截图**（默认 `Ctrl+Alt+A`）：屏幕冻结后拖拽框选，实时显示选区尺寸；松手后可移动选区或拖动
+  四角/四边手柄缩放；`Enter` 确认，`Esc` 或鼠标右键取消。
+- **全屏截图**（默认 `Ctrl+Alt+F`）：可选"主显示器"或"所有显示器"，触发后直接保存。
+- **自动保存**：PNG 格式，默认保存到 exe 所在目录的 `Pictures` 子目录，文件名
+  `SwiftSnip_yyyyMMdd_HHmmss.png`（同秒重名自动编号）；保存位置可在设置中修改。
+- **托盘操作**：左键单击 = 区域截图；右键菜单 = 区域截图 / 全屏截图 / 打开保存目录 / 设置 / 关于 / 退出。
+- **设置窗口**：热键录制（按下组合键即录制，含占用检测）、保存目录选择、全屏范围、开机自启。
+- **单实例**：重复启动会唤起已有实例的设置窗口。
+- 截图结果**不写入剪贴板**（按需求约定），程序也不读取剪贴板内容。
+
+## 系统要求
+
+- Windows 10 1607 及以上（x64）
+- 无需安装任何运行时，绿色单文件
+
+## 使用
+
+1. 运行 `build\SwiftSnip.exe`，程序常驻托盘（无主窗口）。
+2. 按 `Ctrl+Alt+A` 开始区域截图：拖拽选择区域，`Enter` 确认。
+3. 图片自动保存，托盘气泡提示文件名与尺寸。
+4. 右键托盘图标 → 设置：修改热键（点击按钮后按下组合键）、保存目录、全屏范围、开机自启。
+
+配置文件位于 `%APPDATA%\SwiftSnip\config.ini`，与程序分离，移动 exe 不会丢失设置。
+
+## 目录结构
+
+```
+SwiftSnip/
+├─ build.bat                 一键构建（rc + cl，Release x64 静态链接）
+├─ src/                      源码（每个模块单一职责）
+│  ├─ main.cpp               入口、单实例、消息循环、流程编排、自检
+│  ├─ app.h                  常量与自定义消息
+│  ├─ dpi.cpp/.h             PerMonitorV2 DPI 感知
+│  ├─ settings.cpp/.h        INI 配置、热键字符串互转、默认目录
+│  ├─ hotkey.cpp/.h          全局热键注册与冲突检测
+│  ├─ tray.cpp/.h            托盘图标、菜单、气泡提示
+│  ├─ capture.cpp/.h         虚拟屏幕/主屏捕获、裁剪、变暗副本
+│  ├─ png_writer.cpp/.h      WIC 编码 PNG
+│  ├─ overlay.cpp/.h         区域选择遮罩窗口（拖拽、手柄、确认/取消）
+│  ├─ settings_win.cpp/.h    设置窗口
+│  └─ autostart.cpp/.h       开机自启（HKCU Run）
+├─ res/                      图标、清单、版本信息
+├─ tools/make_icon.py        图标生成脚本
+├─ tests/verify_capture.py   PNG 产物校验脚本
+└─ docs/superpowers/         设计规格与实现计划
+```
+
+## 构建
+
+依赖：Visual Studio 2022 BuildTools（MSVC C++ 工具集）+ Windows SDK 10。
+
+```bat
+build.bat
+```
+
+产物：`build\SwiftSnip.exe`（Release、`/O2 /MT`、含图标/清单/版本信息）。
+
+> `build.bat` 中 `VCVARS` 指向本机 `vcvars64.bat`（当前为 `D:\App\VS-BuildTools\...`），
+> 换机器构建时按需修改该变量。
+
+## 自检与测试
+
+| 命令 | 用途 |
+| --- | --- |
+| `SwiftSnip.exe --selftest <png路径>` | 捕获主显示器并保存，日志写入 `<png路径>.log` |
+| `SwiftSnip.exe --check-hotkeys <log路径>` | 检测当前配置的热键是否被占用 |
+| `python tests/verify_capture.py <png> [宽 高]` | 解析 PNG，校验尺寸且非纯色 |
+| `python tools/make_icon.py` | 重新生成多尺寸图标 |
+
+## 实测性能（Windows 10 / 1920×1080 / Release x64）
+
+| 指标 | 目标 | 实测 |
+| --- | --- | --- |
+| 单 exe 体积 | < 1 MB | 218.5 KB |
+| 冷启动到就绪 | < 100 ms | 14.3 ms（3 轮最优） |
+| 常驻内存 | < 15 MB | 7.7 MB（空闲稳态；大位图释放后主动修剪工作集） |
+| 热键到遮罩可见 | < 150 ms | 30.5 ms 最优 / 32.9 ms 平均（5 次） |
+| 连续 300 次遮罩创建/取消 | 无泄漏 | GDI 对象 +0、USER 对象 +0，内存无增长 |
+
+## 验收记录（2026-09-11）
+
+| 验收项 | 结果 |
+| --- | --- |
+| 区域截图端到端（热键 → 遮罩 → 拖拽 → Enter → PNG） | PASS：输出 400×200，像素与桌面同区域一致（极值 20–223） |
+| 全屏截图（所有显示器） | PASS：1920×1080 |
+| 自定义保存目录 | PASS：文件写入自定义目录，重启后配置保持 |
+| 单实例与设置窗口唤起 | PASS：第二实例退出码 0，设置窗口 9 个控件齐全 |
+| 热键占用检测 | PASS：`--check-hotkeys` 返回 `Ctrl+Alt+A`/`Ctrl+Alt+F` 均可用 |
+| 捕获正确性 | PASS：与系统 API 截图逐区域比对，均值 29.6 vs 30.2 |
+| 托盘常驻与退出 | PASS：进程正常退出，无残留 |
+
+## 已知限制
+
+- 受保护内容（DRM、部分独占全屏游戏）无法截取，可能得到黑屏，属系统限制。
+- 程序以普通权限运行，无法截取以管理员身份运行的窗口；如需截取可"以管理员身份运行"本程序。
+- v1 不含标注编辑（矩形/箭头/文字）、滚动长截图、剪贴板写入，列为后续版本候选。
+
+## 开发文档
+
+- 设计规格：`docs/superpowers/specs/2026-09-11-swiftsnip-design.md`
+- 实现计划：`docs/superpowers/plans/2026-09-11-swiftsnip-mvp.md`

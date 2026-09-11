@@ -1,0 +1,37 @@
+#include <windows.h>
+
+// 应用图标（多尺寸 ICO，含 16/24/32/48/64/128/256）
+101 ICON "res\\swiftsnip.ico"
+
+// 应用程序清单：PerMonitorV2 DPI、Common Controls v6 视觉样式、asInvoker 权限
+1 RT_MANIFEST "res\\app.manifest"
+
+// 版本信息（使用 ASCII 文本以避开 rc.exe 代码页差异）
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "SwiftSnip"
+            VALUE "FileDescription", "SwiftSnip - lightweight screenshot tool"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "InternalName", "SwiftSnip"
+            VALUE "OriginalFilename", "SwiftSnip.exe"
+            VALUE "ProductName", "SwiftSnip"
+            VALUE "ProductVersion", "1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
+
