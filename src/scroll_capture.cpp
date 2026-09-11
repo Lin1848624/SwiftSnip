@@ -2,8 +2,10 @@
 
 #include "app.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -16,8 +18,13 @@ constexpr int kMaxNotches = 10;        // 单次滚动的最多滚轮格数
 constexpr int kMaxFrames = 400;        // 帧数安全上限
 constexpr int kNoChangeLimit = 2;      // 连续无变化次数达到该值判定到底
 constexpr int kCalibrateRetryLimit = 3;
-constexpr float kScrollRatio = 0.65f;  // 每次滚动选区高度的比例
-constexpr double kMatchScoreLimit = 32.0;  // 平均每通道差异上限，超过视为不可信
+constexpr float kScrollRatio = 0.45f;  // 每次滚动选区高度的比例（留足重叠，保证模板可验证）
+constexpr double kMatchScoreLimit = 12.0;  // 平均每通道差异上限，超过视为不可信
+constexpr double kMinTemplateVariance = 40.0;  // 模板条带亮度方差下限，过滤纯色区域
+constexpr int kShiftTolerance = 3;             // 多数表决允许的位移偏差（像素）
+constexpr int kMatchFailLimit = 4;             // 连续匹配失败次数上限
+constexpr double kAmbiguityMargin = 0.5;       // 最佳与次佳匹配分数差下限，低于该值视为内容重复、不可信
+constexpr double kStaticThreshold = 0.5;       // 同位置帧差低于该值视为画面完全静止（已到底）
 
 // 帧缓冲：32 位 top-down DIB，可直接访问像素用于匹配
 struct Frame {
@@ -129,6 +136,11 @@ struct MatchResult {
     double score = 1e9;   // 平均每通道差异
 };
 
+struct StripMatch {
+    int shift = -1;     // 相对模板位置的位移（像素）
+    double score = 1e9; // 平均每通道差异
+};
+
 enum class SessionState {
     Idle,
     WaitAfterCursorMove,
@@ -155,6 +167,7 @@ struct Session {
     int unitOffset = 0;
     int notches = 1;
     int noChangeCount = 0;
+    int matchFailCount = 0;
     int calibrateRetry = 0;
     int frameCount = 0;
 
@@ -167,63 +180,215 @@ struct Session {
 
 Session g_session;
 
-// 在上一帧中搜索与当前帧顶部条带最匹配的位置
-MatchResult MatchScrollOffset(const Frame& previous, const Frame& current, int searchMin, int searchMax) {
-    MatchResult result;
-    if (previous.bits == nullptr || current.bits == nullptr) {
-        return result;
-    }
-
-    const int width = current.width;
-    const int height = current.height;
-    int stripHeight = height / 3;
-    if (stripHeight > 64) {
-        stripHeight = 64;
-    }
-    if (stripHeight <= 0) {
-        return result;
-    }
-
-    int minY = searchMin < 0 ? 0 : searchMin;
-    int maxY = searchMax;
-    if (maxY > height - stripHeight) {
-        maxY = height - stripHeight;
-    }
-    if (maxY < minY) {
-        return result;
-    }
-
-    const int stride = width * 4;
-    const BYTE* currentBits = static_cast<const BYTE*>(current.bits);
-    const BYTE* previousBits = static_cast<const BYTE*>(previous.bits);
-    int stepX = width / 160;
+// 计算模板条带的亮度方差，用于过滤纯色/低纹理区域
+double ComputeLumaVariance(const Frame& frame, int top, int stripHeight) {
+    const int stride = frame.width * 4;
+    const BYTE* bits = static_cast<const BYTE*>(frame.bits);
+    int stepX = frame.width / 80;
     if (stepX < 1) {
         stepX = 1;
     }
     const int stepY = 3;
 
-    for (int y = minY; y <= maxY; ++y) {
-        unsigned long long sad = 0;
-        int count = 0;
-        for (int row = 0; row < stripHeight; row += stepY) {
-            const BYTE* a = currentBits + static_cast<size_t>(row) * stride;
-            const BYTE* b = previousBits + static_cast<size_t>(y + row) * stride;
-            for (int x = 0; x < width; x += stepX) {
-                const BYTE* pa = a + static_cast<size_t>(x) * 4;
-                const BYTE* pb = b + static_cast<size_t>(x) * 4;
-                sad += abs(pa[0] - pb[0]) + abs(pa[1] - pb[1]) + abs(pa[2] - pb[2]);
-                count += 3;
-            }
-        }
-        if (count == 0) {
-            continue;
-        }
-        const double score = static_cast<double>(sad) / count;
-        if (score < result.score) {
-            result.score = score;
-            result.offset = y;
+    double sum = 0;
+    double sumSquares = 0;
+    int count = 0;
+    for (int row = 0; row < stripHeight; row += stepY) {
+        const BYTE* line = bits + static_cast<size_t>(top + row) * stride;
+        for (int x = 0; x < frame.width; x += stepX) {
+            const BYTE* pixel = line + static_cast<size_t>(x) * 4;
+            const double luma = 0.114 * pixel[0] + 0.587 * pixel[1] + 0.299 * pixel[2];
+            sum += luma;
+            sumSquares += luma * luma;
+            ++count;
         }
     }
+    if (count == 0) {
+        return 0;
+    }
+    const double mean = sum / count;
+    const double variance = sumSquares / count - mean * mean;
+    return variance > 0 ? variance : 0;
+}
+
+// 计算模板条带在 previous 中偏移 shift 处的平均每通道差异
+double ComputeSadAt(const Frame& previous, const Frame& current, int top, int stripHeight, int shift, int stepX,
+                    int stepY) {
+    const int width = current.width;
+    const int height = current.height;
+    const int targetTop = top + shift;
+    if (targetTop < 0 || targetTop + stripHeight > height) {
+        return 1e9;
+    }
+
+    const int stride = width * 4;
+    const BYTE* currentBits = static_cast<const BYTE*>(current.bits);
+    const BYTE* previousBits = static_cast<const BYTE*>(previous.bits);
+
+    unsigned long long sad = 0;
+    int count = 0;
+    for (int row = 0; row < stripHeight; row += stepY) {
+        const BYTE* a = currentBits + static_cast<size_t>(top + row) * stride;
+        const BYTE* b = previousBits + static_cast<size_t>(targetTop + row) * stride;
+        for (int x = 0; x < width; x += stepX) {
+            const BYTE* pa = a + static_cast<size_t>(x) * 4;
+            const BYTE* pb = b + static_cast<size_t>(x) * 4;
+            sad += abs(pa[0] - pb[0]) + abs(pa[1] - pb[1]) + abs(pa[2] - pb[2]);
+            count += 3;
+        }
+    }
+    return count > 0 ? static_cast<double>(sad) / count : 1e9;
+}
+
+// 在上一帧中搜索当前帧 [top, top+stripHeight) 条带的最匹配位移。
+// 两阶段搜索：先稀疏粗搜定位，再在候选附近密集精搜，并做唯一性检查。
+StripMatch MatchStripAt(const Frame& previous, const Frame& current, int top, int stripHeight, int minShift,
+                        int maxShift) {
+    StripMatch result;
+
+    // 阶段一：粗搜（大步长采样 + 4 像素搜索步进）
+    int coarseShift = -1;
+    double coarseScore = 1e9;
+    for (int shift = minShift; shift <= maxShift; shift += 4) {
+        const double score = ComputeSadAt(previous, current, top, stripHeight, shift, 16, 6);
+        if (score < coarseScore) {
+            coarseScore = score;
+            coarseShift = shift;
+        }
+    }
+    if (coarseShift < 0) {
+        return result;
+    }
+
+    // 阶段二：在粗搜结果附近精搜
+    int bestShift = -1;
+    double bestScore = 1e9;
+    double secondScore = 1e9;
+    const int from = coarseShift - 8;
+    const int to = coarseShift + 8;
+    for (int shift = from; shift <= to; ++shift) {
+        if (shift < minShift || shift > maxShift) {
+            continue;
+        }
+        const double score = ComputeSadAt(previous, current, top, stripHeight, shift, 4, 2);
+        if (score < bestScore) {
+            if (bestShift >= 0 && abs(shift - bestShift) > kShiftTolerance) {
+                secondScore = bestScore;
+            }
+            bestScore = score;
+            bestShift = shift;
+        } else if (score < secondScore && (bestShift < 0 || abs(shift - bestShift) > kShiftTolerance)) {
+            secondScore = score;
+        }
+    }
+
+    if (bestShift < 0) {
+        return result;
+    }
+    // 唯一性检查：若存在几乎同样好的其他位置，说明内容在该尺度上重复，位移不可信
+    if (secondScore < 1e9 && secondScore - bestScore < kAmbiguityMargin) {
+        return result;
+    }
+    result.shift = bestShift;
+    result.score = bestScore;
+    return result;
+}
+
+// 多候选条带匹配 + 多数表决：
+// 在选区内取多个位置的条带分别匹配，固定表头、浮动按钮等局部元素会给出少数派结果而被淘汰
+MatchResult MultiMatch(const Frame& previous, const Frame& current, int minShift, int maxShift) {
+    MatchResult result;
+    if (previous.bits == nullptr || current.bits == nullptr) {
+        return result;
+    }
+
+    const int height = current.height;
+    if (maxShift < minShift) {
+        return result;
+    }
+
+    // 模板高度取选区高度的 1/6，并保证"模板位置 + 最大位移"仍落在上一帧内，
+    // 否则该模板在上一帧中不可见，会产生假匹配
+    const int topMin = height * 5 / 100;  // 从 5% 高度开始，尽量避开顶部固定表头
+    int stripHeight = height / 6;
+    if (stripHeight > 160) {
+        stripHeight = 160;
+    }
+    int topMax = height - stripHeight - maxShift;
+    if (topMax < topMin) {
+        stripHeight = height - topMin - maxShift;
+        if (stripHeight < 16) {
+            return result;  // 位移过大，找不到可验证的模板位置
+        }
+        topMax = height - stripHeight - maxShift;
+    }
+    if (topMax < topMin) {
+        return result;
+    }
+
+    struct Hit {
+        int shift;
+        double score;
+    };
+    std::vector<Hit> hits;
+
+    constexpr int kCandidateCount = 4;
+    for (int index = 0; index < kCandidateCount; ++index) {
+        const int top = topMin + (topMax - topMin) * index / (kCandidateCount - 1);
+        const double variance = ComputeLumaVariance(current, top, stripHeight);
+        if (variance < kMinTemplateVariance) {
+            continue;  // 纯色区域没有匹配特征
+        }
+        const StripMatch match = MatchStripAt(previous, current, top, stripHeight, minShift, maxShift);
+        if (match.shift >= 0 && match.score <= kMatchScoreLimit) {
+            hits.push_back({match.shift, match.score});
+        }
+    }
+
+    if (hits.empty()) {
+        return result;
+    }
+    if (hits.size() == 1) {
+        result.offset = hits[0].shift;
+        result.score = hits[0].score;
+        return result;
+    }
+
+    // 找出最大的位移一致簇
+    int bestCount = 0;
+    long long bestSum = 0;
+    double bestScore = 1e9;
+    for (const Hit& seed : hits) {
+        int count = 0;
+        long long sum = 0;
+        double scoreSum = 0;
+        for (const Hit& other : hits) {
+            if (abs(other.shift - seed.shift) <= kShiftTolerance) {
+                ++count;
+                sum += other.shift;
+                scoreSum += other.score;
+            }
+        }
+        const double averageScore = scoreSum / count;
+        if (count > bestCount || (count == bestCount && averageScore < bestScore)) {
+            bestCount = count;
+            bestSum = sum;
+            bestScore = averageScore;
+        }
+    }
+
+    if (bestCount < 2) {
+        // 无共识时退而求其次：取分数最低且明显优于次低的候选
+        std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.score < b.score; });
+        if (hits.size() >= 2 && hits[0].score < hits[1].score * 0.8) {
+            result.offset = hits[0].shift;
+            result.score = hits[0].score;
+            return result;
+        }
+        return result;
+    }
+    result.offset = static_cast<int>(bestSum / bestCount);
+    result.score = bestScore;
     return result;
 }
 
@@ -265,6 +430,7 @@ void CleanupSession(Session& session) {
     session.unitOffset = 0;
     session.notches = 1;
     session.noChangeCount = 0;
+    session.matchFailCount = 0;
     session.calibrateRetry = 0;
     session.frameCount = 0;
 
@@ -393,8 +559,8 @@ void CalibrateStage() {
         return;
     }
 
-    const MatchResult match = MatchScrollOffset(previous, current, 1, session.regionHeight * 8 / 10);
-    if (match.offset > 0 && match.score <= kMatchScoreLimit) {
+    const MatchResult match = MultiMatch(previous, current, 0, session.regionHeight * 4 / 10);
+    if (match.offset > 0) {
         session.unitOffset = match.offset;
         int target = static_cast<int>(session.regionHeight * kScrollRatio);
         if (target < 1) {
@@ -448,16 +614,42 @@ void ScrollStage() {
     }
 
     const int expected = session.unitOffset * session.notches;
-    const int minY = expected * 2 / 5;
-    const int maxY = expected * 8 / 5;
-    const MatchResult match = MatchScrollOffset(previous, current, minY, maxY);
+    // 搜索范围必须包含 0：页面停止滚动时匹配应回到 0，而不是在范围边界产生假位移
+    const int minShift = 0;
+    const int maxShift = expected * 115 / 100;
 
-    if (match.offset <= 0 || match.score > kMatchScoreLimit * 2.0) {
+    // 快速静止检测：画面与上一帧完全一致（页面已滚动到底），直接判定无位移
+    const double staticSad =
+        ComputeSadAt(previous, current, current.height / 10, current.height * 8 / 10, 0, 8, 4);
+    if (staticSad < kStaticThreshold) {
         if (++session.noChangeCount >= kNoChangeLimit) {
             Finish(true);
             return;
         }
-        // 再等一会儿重新捕获同一位置
+        session.waitUntil = GetTickCount64() + kRetryWaitMs;
+        return;
+    }
+    session.noChangeCount = 0;
+
+    const MatchResult match = MultiMatch(previous, current, minShift, maxShift);
+
+    if (match.offset < 0) {
+        // 匹配失败（低纹理或候选无共识）：重试若干次后结束并保存已捕获内容
+        if (++session.matchFailCount >= kMatchFailLimit) {
+            Finish(true);
+            return;
+        }
+        session.waitUntil = GetTickCount64() + kRetryWaitMs;
+        return;
+    }
+    session.matchFailCount = 0;
+
+    if (match.offset == 0) {
+        // 画面确实没有位移：可能已滚动到底
+        if (++session.noChangeCount >= kNoChangeLimit) {
+            Finish(true);
+            return;
+        }
         session.waitUntil = GetTickCount64() + kRetryWaitMs;
         return;
     }
@@ -550,6 +742,7 @@ bool StartScrollCapture(HWND owner, const ScrollCaptureOptions& options, std::fu
     session.unitOffset = 0;
     session.notches = 1;
     session.noChangeCount = 0;
+    session.matchFailCount = 0;
     session.calibrateRetry = 0;
     session.frameCount = 0;
     session.stitchHeight = 0;
