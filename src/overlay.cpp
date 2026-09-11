@@ -232,7 +232,9 @@ void DrawSelectionDecorations(HDC dc, const OverlayState& state, const RECT& dir
 }
 
 void DrawHint(HDC dc, const OverlayState& state, const RECT& dirty) {
-    const wchar_t* hint = L"拖动鼠标选择区域　·　Enter 确认　·　Esc / 右键取消";
+    const wchar_t* hint =
+        state.cropImage ? L"拖动鼠标选择区域　·　Enter 确认　·　Esc / 右键取消"
+                        : L"拖动选择滚动区域　·　Enter 开始长截图　·　开始后按 Esc 或再按热键结束";
     SIZE textSize = {};
     GetTextExtentPoint32W(dc, hint, static_cast<int>(wcslen(hint)), &textSize);
 

@@ -26,6 +26,10 @@ constexpr int kMatchFailLimit = 4;             // 连续匹配失败次数上限
 constexpr double kAmbiguityMargin = 0.5;       // 最佳与次佳匹配分数差下限，低于该值视为内容重复、不可信
 constexpr double kStaticThreshold = 0.5;       // 同位置帧差低于该值视为画面完全静止（已到底）
 
+// 滚动期间显示的选区外框：完全位于选区之外，不会被截入长图
+constexpr wchar_t kFrameWndClass[] = L"SwiftSnipScrollFrame";
+constexpr int kFrameMargin = 4;
+
 // 帧缓冲：32 位 top-down DIB，可直接访问像素用于匹配
 struct Frame {
     HBITMAP bitmap = nullptr;
@@ -176,9 +180,67 @@ struct Session {
     ULONGLONG waitUntil = 0;
     std::function<void(CapturedImage)> onDone;
     HHOOK hook = nullptr;
+    HWND frameWindow = nullptr;
 };
 
 Session g_session;
+
+LRESULT CALLBACK ScrollFrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    switch (message) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_NCHITTEST:
+            return HTTRANSPARENT;  // 点击穿透，不干扰用户操作
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+// 创建选区外框窗口（仅显示滚动范围与进行状态，不遮挡任何被截内容）
+HWND CreateScrollFrameWindow(const RECT& region) {
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = ScrollFrameProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = CreateSolidBrush(RGB(0, 120, 215));
+        wc.lpszClassName = kFrameWndClass;
+        if (RegisterClassExW(&wc) == 0) {
+            return nullptr;
+        }
+        registered = true;
+    }
+
+    const int x = region.left - kFrameMargin;
+    const int y = region.top - kFrameMargin;
+    const int width = (region.right - region.left) + kFrameMargin * 2;
+    const int height = (region.bottom - region.top) + kFrameMargin * 2;
+    if (width <= 0 || height <= 0) {
+        return nullptr;
+    }
+
+    HWND hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+                                kFrameWndClass, L"", WS_POPUP, x, y, width, height, nullptr, nullptr,
+                                GetModuleHandleW(nullptr), nullptr);
+    if (hwnd == nullptr) {
+        return nullptr;
+    }
+
+    // 挖空中间区域，只保留选区外侧的细边框
+    HRGN outer = CreateRectRgn(0, 0, width, height);
+    HRGN inner = CreateRectRgn(kFrameMargin, kFrameMargin, width - kFrameMargin, height - kFrameMargin);
+    CombineRgn(outer, outer, inner, RGN_DIFF);
+    DeleteObject(inner);
+    SetWindowRgn(hwnd, outer, TRUE);  // 区域所有权交给系统
+
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    return hwnd;
+}
 
 // 计算模板条带的亮度方差，用于过滤纯色/低纹理区域
 double ComputeLumaVariance(const Frame& frame, int top, int stripHeight) {
@@ -419,6 +481,10 @@ void CleanupSession(Session& session) {
     if (session.hook != nullptr) {
         UnhookWindowsHookEx(session.hook);
         session.hook = nullptr;
+    }
+    if (session.frameWindow != nullptr) {
+        DestroyWindow(session.frameWindow);
+        session.frameWindow = nullptr;
     }
     CleanupFrames(session);
     session.active = false;
@@ -725,6 +791,10 @@ bool StartScrollCapture(HWND owner, const ScrollCaptureOptions& options, std::fu
 
     Session& session = g_session;
     CleanupFrames(session);
+    if (session.frameWindow != nullptr) {
+        DestroyWindow(session.frameWindow);
+        session.frameWindow = nullptr;
+    }
 
     if (!session.frames[0].Create(width, height) || !session.frames[1].Create(width, height)) {
         CleanupFrames(session);
@@ -755,6 +825,7 @@ bool StartScrollCapture(HWND owner, const ScrollCaptureOptions& options, std::fu
     SetCursorPos((options.region.left + options.region.right) / 2, (options.region.top + options.region.bottom) / 2);
 
     session.hook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandleW(nullptr), 0);
+    session.frameWindow = CreateScrollFrameWindow(options.region);
     SetTimer(owner, kTimerId, kTimerIntervalMs, nullptr);
     return true;
 }

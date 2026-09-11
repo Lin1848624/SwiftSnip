@@ -180,7 +180,7 @@ void CaptureScrollAndSave() {
         g_mainWnd, fullScreen, false, [](CapturedImage, const RegionSelection& selection) {
             if (selection.screenRect.right > selection.screenRect.left &&
                 selection.screenRect.bottom > selection.screenRect.top) {
-                TrayShowBalloon(L"长截图进行中", L"正在自动滚动捕获，按 Esc 或再次按热键结束。");
+                // 滚动期间不显示任何屏幕上的提示：气泡会被逐帧拍进长图（固定元素重复出现）
                 StartScrollSession(selection.screenRect);
             }
         });
