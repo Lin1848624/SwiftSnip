@@ -3,7 +3,7 @@
 namespace {
 
 // 捕获屏幕上指定矩形区域（屏幕物理像素坐标）
-bool CaptureScreenRect(const RECT& rect, CapturedImage* out) {
+bool CaptureScreenRectImpl(const RECT& rect, CapturedImage* out) {
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
     if (width <= 0 || height <= 0 || out == nullptr) {
@@ -64,7 +64,7 @@ bool CaptureVirtualScreen(CapturedImage* out) {
     rect.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
     rect.right = rect.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
     rect.bottom = rect.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    return CaptureScreenRect(rect, out);
+    return CaptureScreenRectImpl(rect, out);
 }
 
 bool CapturePrimaryMonitor(CapturedImage* out) {
@@ -75,7 +75,11 @@ bool CapturePrimaryMonitor(CapturedImage* out) {
     if (monitor == nullptr || !GetMonitorInfoW(monitor, &info)) {
         return false;
     }
-    return CaptureScreenRect(info.rcMonitor, out);
+    return CaptureScreenRectImpl(info.rcMonitor, out);
+}
+
+bool CaptureScreenRegion(const RECT& rect, CapturedImage* out) {
+    return CaptureScreenRectImpl(rect, out);
 }
 
 bool CropCapturedImage(const CapturedImage& source, const RECT& rect, CapturedImage* out) {

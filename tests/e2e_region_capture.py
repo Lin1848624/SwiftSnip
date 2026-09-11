@@ -14,7 +14,28 @@ from ctypes import wintypes
 from PIL import Image
 
 EXE = r"D:\project\SwiftSnip\build\SwiftSnip.exe"
-PICTURES = os.path.join(os.path.dirname(EXE), "Pictures")
+
+
+def resolve_save_dir():
+    """读取程序配置中的保存目录；未配置时回退到 exe 同级的 Pictures。"""
+    config = os.path.join(os.environ.get("APPDATA", ""), "SwiftSnip", "config.ini")
+    if os.path.exists(config):
+        for encoding in ("utf-16", "utf-8-sig", "utf-8"):
+            try:
+                with open(config, encoding=encoding) as handle:
+                    for line in handle:
+                        stripped = line.strip()
+                        if stripped.lower().startswith("savedir="):
+                            value = stripped.split("=", 1)[1].strip()
+                            if value:
+                                return value
+                break
+            except (UnicodeError, OSError):
+                continue
+    return os.path.join(os.path.dirname(EXE), "Pictures")
+
+
+PICTURES = resolve_save_dir()
 
 MAIN_CLASS = "SwiftSnipMainWnd"
 OVERLAY_CLASS = "SwiftSnipOverlayWnd"

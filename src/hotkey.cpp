@@ -19,6 +19,9 @@ std::wstring RegisterAppHotkeys(HWND hwnd, const AppSettings& settings) {
     } else if (!RegisterHotKey(hwnd, kHotkeyIdFullscreen, settings.fullscreenHotkey.modifiers | MOD_NOREPEAT,
                                settings.fullscreenHotkey.vk)) {
         failed = HotkeyToString(settings.fullscreenHotkey);
+    } else if (!RegisterHotKey(hwnd, kHotkeyIdScroll, settings.scrollHotkey.modifiers | MOD_NOREPEAT,
+                               settings.scrollHotkey.vk)) {
+        failed = HotkeyToString(settings.scrollHotkey);
     }
 
     if (!failed.empty()) {
@@ -31,6 +34,7 @@ std::wstring RegisterAppHotkeys(HWND hwnd, const AppSettings& settings) {
 void UnregisterAppHotkeys(HWND hwnd) {
     UnregisterHotKey(hwnd, kHotkeyIdRegion);
     UnregisterHotKey(hwnd, kHotkeyIdFullscreen);
+    UnregisterHotKey(hwnd, kHotkeyIdScroll);
 }
 
 bool IsHotkeyAvailable(const HotkeyConfig& hotkey) {
@@ -49,4 +53,3 @@ bool IsHotkeyAvailable(const HotkeyConfig& hotkey) {
     }
     return false;
 }
-

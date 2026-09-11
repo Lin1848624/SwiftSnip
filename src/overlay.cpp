@@ -56,7 +56,8 @@ struct OverlayState {
     RECT dragStartRect = {};
 
     HFONT font = nullptr;
-    std::function<void(CapturedImage)> onDone;
+    bool cropImage = true;
+    std::function<void(CapturedImage, const RegionSelection&)> onDone;
     bool finishing = false;
 };
 
@@ -450,6 +451,7 @@ void ReleaseOverlayResources() {
     state.height = 0;
     state.hwnd = nullptr;
     state.onDone = nullptr;
+    state.cropImage = true;
     state.finishing = false;
 
     // 全屏位图等大块内存已释放，主动修剪工作集，让物理内存尽快归还系统
@@ -464,18 +466,27 @@ void FinishCapture(HWND hwnd, bool confirmed) {
     state.finishing = true;
 
     CapturedImage result;
+    RegionSelection selection;
     if (confirmed && state.hasSelection && IsUsableSelection(state.selection)) {
-        // 全屏位图正被遮罩的源 DC 占用，先取消占用，否则裁剪时 SelectObject 会失败
-        if (state.sourceDc != nullptr) {
-            SelectObject(state.sourceDc, state.oldSourceBitmap);
+        selection.bitmapRect = state.selection;
+        selection.screenRect.left = state.fullScreen.originX + state.selection.left;
+        selection.screenRect.top = state.fullScreen.originY + state.selection.top;
+        selection.screenRect.right = state.fullScreen.originX + state.selection.right;
+        selection.screenRect.bottom = state.fullScreen.originY + state.selection.bottom;
+
+        if (state.cropImage) {
+            // 全屏位图正被遮罩的源 DC 占用，先取消占用，否则裁剪时 SelectObject 会失败
+            if (state.sourceDc != nullptr) {
+                SelectObject(state.sourceDc, state.oldSourceBitmap);
+            }
+            CropCapturedImage(state.fullScreen, state.selection, &result);
         }
-        CropCapturedImage(state.fullScreen, state.selection, &result);
     }
 
-    std::function<void(CapturedImage)> callback = state.onDone;
+    std::function<void(CapturedImage, const RegionSelection&)> callback = state.onDone;
     DestroyWindow(hwnd);
     if (callback) {
-        callback(result);
+        callback(result, selection);
     } else if (result.Valid()) {
         result.Release();
     }
@@ -614,7 +625,8 @@ bool EnsureWindowClass() {
 
 }  // namespace
 
-bool StartRegionCapture(HWND owner, CapturedImage fullScreen, std::function<void(CapturedImage)> onDone) {
+bool StartRegionCapture(HWND owner, CapturedImage fullScreen, bool cropImage,
+                        std::function<void(CapturedImage, const RegionSelection&)> onDone) {
     if (!fullScreen.Valid() || g_overlay.hwnd != nullptr) {
         return false;
     }
@@ -626,6 +638,7 @@ bool StartRegionCapture(HWND owner, CapturedImage fullScreen, std::function<void
     state.fullScreen = fullScreen;
     state.width = fullScreen.width;
     state.height = fullScreen.height;
+    state.cropImage = cropImage;
     state.onDone = std::move(onDone);
     state.finishing = false;
 

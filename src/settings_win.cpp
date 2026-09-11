@@ -23,19 +23,32 @@ constexpr int kIdAutoStart = 3006;
 constexpr int kIdSave = 3007;
 constexpr int kIdCancel = 3008;
 constexpr int kIdOpenDir = 3009;
+constexpr int kIdHotkeyScroll = 3010;
+
+// 热键字段（区域 / 全屏 / 长截图）
+enum class HotkeyField {
+    Region = 0,
+    Fullscreen = 1,
+    Scroll = 2,
+};
+
+constexpr int kHotkeyFieldCount = 3;
 
 struct SettingsWindowState {
     HWND hwnd = nullptr;
     HWND owner = nullptr;
     HWND regionButton = nullptr;
     HWND fullscreenButton = nullptr;
+    HWND scrollButton = nullptr;
     HWND saveDirEdit = nullptr;
     HWND scopeCombo = nullptr;
     HWND autoStartCheck = nullptr;
     HotkeyConfig regionHotkey;
     HotkeyConfig fullscreenHotkey;
+    HotkeyConfig scrollHotkey;
     bool recordingRegion = false;
     bool recordingFullscreen = false;
+    bool recordingScroll = false;
     UINT dpi = 96;
     HFONT font = nullptr;
 };
@@ -55,31 +68,77 @@ std::wstring Trim(const std::wstring& text) {
     return text.substr(begin, end - begin + 1);
 }
 
-void UpdateHotkeyButtonText(bool isRegion) {
-    HWND button = isRegion ? g_settings.regionButton : g_settings.fullscreenButton;
-    const bool recording = isRegion ? g_settings.recordingRegion : g_settings.recordingFullscreen;
-    const HotkeyConfig& hotkey = isRegion ? g_settings.regionHotkey : g_settings.fullscreenHotkey;
+HotkeyField FieldFromSubclassId(UINT_PTR id) {
+    if (id == kIdHotkeyFullscreen) {
+        return HotkeyField::Fullscreen;
+    }
+    if (id == kIdHotkeyScroll) {
+        return HotkeyField::Scroll;
+    }
+    return HotkeyField::Region;
+}
+
+HWND& ButtonFor(HotkeyField field) {
+    if (field == HotkeyField::Fullscreen) {
+        return g_settings.fullscreenButton;
+    }
+    if (field == HotkeyField::Scroll) {
+        return g_settings.scrollButton;
+    }
+    return g_settings.regionButton;
+}
+
+HotkeyConfig& HotkeyFor(HotkeyField field) {
+    if (field == HotkeyField::Fullscreen) {
+        return g_settings.fullscreenHotkey;
+    }
+    if (field == HotkeyField::Scroll) {
+        return g_settings.scrollHotkey;
+    }
+    return g_settings.regionHotkey;
+}
+
+bool& RecordingFor(HotkeyField field) {
+    if (field == HotkeyField::Fullscreen) {
+        return g_settings.recordingFullscreen;
+    }
+    if (field == HotkeyField::Scroll) {
+        return g_settings.recordingScroll;
+    }
+    return g_settings.recordingRegion;
+}
+
+void UpdateHotkeyButtonText(HotkeyField field) {
+    HWND button = ButtonFor(field);
+    const bool recording = RecordingFor(field);
+    const HotkeyConfig& hotkey = HotkeyFor(field);
     if (button == nullptr) {
         return;
     }
     SetWindowTextW(button, recording ? L"请按下组合键…" : HotkeyToString(hotkey).c_str());
 }
 
+void UpdateAllHotkeyButtons() {
+    for (int index = 0; index < kHotkeyFieldCount; ++index) {
+        UpdateHotkeyButtonText(static_cast<HotkeyField>(index));
+    }
+}
+
 // 热键按钮子类过程：按下后进入录制状态，捕获下一个组合键
 LRESULT CALLBACK HotkeyButtonProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR subclassId,
                                   DWORD_PTR) {
-    const bool isRegion = (subclassId == kIdHotkeyRegion);
-    bool& recording = isRegion ? g_settings.recordingRegion : g_settings.recordingFullscreen;
-    HotkeyConfig& hotkey = isRegion ? g_settings.regionHotkey : g_settings.fullscreenHotkey;
+    const HotkeyField field = FieldFromSubclassId(subclassId);
+    bool& recording = RecordingFor(field);
+    HotkeyConfig& hotkey = HotkeyFor(field);
 
     switch (message) {
         case WM_LBUTTONDOWN:
             g_settings.recordingRegion = false;
             g_settings.recordingFullscreen = false;
+            g_settings.recordingScroll = false;
             recording = true;
             SetFocus(hwnd);
-            UpdateHotkeyButtonText(true);
-            UpdateHotkeyButtonText(false);
+            UpdateAllHotkeyButtons();
             return 0;
 
         case WM_KEYDOWN:
@@ -93,7 +152,7 @@ LRESULT CALLBACK HotkeyButtonProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM
             }
             if (vk == VK_ESCAPE) {
                 recording = false;
-                UpdateHotkeyButtonText(isRegion);
+                UpdateHotkeyButtonText(field);
                 return 0;
             }
 
@@ -121,14 +180,14 @@ LRESULT CALLBACK HotkeyButtonProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM
 
             hotkey = candidate;
             recording = false;
-            UpdateHotkeyButtonText(isRegion);
+            UpdateHotkeyButtonText(field);
             return 0;
         }
 
         case WM_KILLFOCUS:
             if (recording) {
                 recording = false;
-                UpdateHotkeyButtonText(isRegion);
+                UpdateHotkeyButtonText(field);
             }
             break;
 
@@ -162,10 +221,16 @@ void BrowseForFolder(HWND hwnd) {
 }
 
 void OnSaveClicked(HWND hwnd) {
-    if (g_settings.regionHotkey.vk == g_settings.fullscreenHotkey.vk &&
-        g_settings.regionHotkey.modifiers == g_settings.fullscreenHotkey.modifiers) {
-        MessageBoxW(hwnd, L"区域截图与全屏截图不能使用同一个热键。", L"热键冲突", MB_OK | MB_ICONWARNING);
-        return;
+    HotkeyConfig* hotkeys[kHotkeyFieldCount] = {&g_settings.regionHotkey, &g_settings.fullscreenHotkey,
+                                                &g_settings.scrollHotkey};
+    for (int i = 0; i < kHotkeyFieldCount; ++i) {
+        for (int j = i + 1; j < kHotkeyFieldCount; ++j) {
+            if (hotkeys[i]->vk == hotkeys[j]->vk && hotkeys[i]->modifiers == hotkeys[j]->modifiers) {
+                MessageBoxW(hwnd, L"区域截图、长截图、全屏截图不能使用相同热键。", L"热键冲突",
+                            MB_OK | MB_ICONWARNING);
+                return;
+            }
+        }
     }
 
     wchar_t buffer[1024] = {};
@@ -178,9 +243,14 @@ void OnSaveClicked(HWND hwnd) {
     // 试注册新热键：先注销当前注册，探测完成后无论成败都恢复注册
     const AppSettings& current = Settings::Instance().Get();
     UnregisterAppHotkeys(g_settings.owner);
-    const bool regionAvailable = IsHotkeyAvailable(g_settings.regionHotkey);
-    const bool fullscreenAvailable = regionAvailable && IsHotkeyAvailable(g_settings.fullscreenHotkey);
-    if (!regionAvailable || !fullscreenAvailable) {
+    bool allAvailable = true;
+    for (int i = 0; i < kHotkeyFieldCount; ++i) {
+        if (!IsHotkeyAvailable(*hotkeys[i])) {
+            allAvailable = false;
+            break;
+        }
+    }
+    if (!allAvailable) {
         RegisterAppHotkeys(g_settings.owner, current);
         MessageBoxW(hwnd, L"所选热键已被其他程序占用，请更换后重试。", L"热键不可用", MB_OK | MB_ICONWARNING);
         return;
@@ -189,6 +259,7 @@ void OnSaveClicked(HWND hwnd) {
     AppSettings& data = Settings::Instance().Mutable();
     data.regionHotkey = g_settings.regionHotkey;
     data.fullscreenHotkey = g_settings.fullscreenHotkey;
+    data.scrollHotkey = g_settings.scrollHotkey;
     data.saveDir = (saveDir == Settings::Instance().DefaultSaveDir()) ? L"" : saveDir;
 
     const LRESULT scope = SendMessageW(g_settings.scopeCombo, CB_GETCURSEL, 0, 0);
@@ -229,6 +300,10 @@ void LayoutControls() {
     MoveWindow(g_settings.fullscreenButton, controlX, y, controlWidth, rowHeight, TRUE);
     y += rowGap;
 
+    MoveWindow(GetDlgItem(g_settings.hwnd, 3105), Scale(18), y + Scale(4), labelWidth, rowHeight, TRUE);
+    MoveWindow(g_settings.scrollButton, controlX, y, controlWidth, rowHeight, TRUE);
+    y += rowGap;
+
     MoveWindow(labelSaveDir, Scale(18), y + Scale(4), labelWidth, rowHeight, TRUE);
     MoveWindow(g_settings.saveDirEdit, controlX, y, controlWidth, rowHeight, TRUE);
     MoveWindow(GetDlgItem(g_settings.hwnd, kIdBrowse), controlX + controlWidth + Scale(8), y, Scale(80), rowHeight, TRUE);
@@ -266,9 +341,11 @@ void CreateControls(HWND hwnd) {
     create(L"STATIC", L"全屏截图热键：", SS_LEFT, 0, 3102);
     create(L"STATIC", L"保存目录：", SS_LEFT, 0, 3103);
     create(L"STATIC", L"全屏范围：", SS_LEFT, 0, 3104);
+    create(L"STATIC", L"长截图热键：", SS_LEFT, 0, 3105);
 
     g_settings.regionButton = create(L"BUTTON", L"", BS_PUSHBUTTON, 0, kIdHotkeyRegion);
     g_settings.fullscreenButton = create(L"BUTTON", L"", BS_PUSHBUTTON, 0, kIdHotkeyFullscreen);
+    g_settings.scrollButton = create(L"BUTTON", L"", BS_PUSHBUTTON, 0, kIdHotkeyScroll);
     g_settings.saveDirEdit = create(L"EDIT", L"", ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, kIdSaveDirEdit);
     create(L"BUTTON", L"浏览…", BS_PUSHBUTTON, 0, kIdBrowse);
     g_settings.scopeCombo = create(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 0, kIdScopeCombo);
@@ -284,8 +361,8 @@ void CreateControls(HWND hwnd) {
     const AppSettings& data = Settings::Instance().Get();
     g_settings.regionHotkey = data.regionHotkey;
     g_settings.fullscreenHotkey = data.fullscreenHotkey;
-    UpdateHotkeyButtonText(true);
-    UpdateHotkeyButtonText(false);
+    g_settings.scrollHotkey = data.scrollHotkey;
+    UpdateAllHotkeyButtons();
 
     const std::wstring saveDir = Settings::Instance().EffectiveSaveDir();
     SetWindowTextW(g_settings.saveDirEdit, saveDir.c_str());
@@ -295,6 +372,7 @@ void CreateControls(HWND hwnd) {
 
     SetWindowSubclass(g_settings.regionButton, HotkeyButtonProc, kIdHotkeyRegion, 0);
     SetWindowSubclass(g_settings.fullscreenButton, HotkeyButtonProc, kIdHotkeyFullscreen, 0);
+    SetWindowSubclass(g_settings.scrollButton, HotkeyButtonProc, kIdHotkeyScroll, 0);
 
     LayoutControls();
 }
@@ -343,11 +421,13 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
             g_settings.hwnd = nullptr;
             g_settings.regionButton = nullptr;
             g_settings.fullscreenButton = nullptr;
+            g_settings.scrollButton = nullptr;
             g_settings.saveDirEdit = nullptr;
             g_settings.scopeCombo = nullptr;
             g_settings.autoStartCheck = nullptr;
             g_settings.recordingRegion = false;
             g_settings.recordingFullscreen = false;
+            g_settings.recordingScroll = false;
             return 0;
 
         case WM_CTLCOLORSTATIC:
@@ -398,7 +478,7 @@ void ShowSettingsWindow(HWND owner) {
     g_settings.recordingFullscreen = false;
     g_settings.dpi = GetDpiForSystem();
 
-    RECT rect = {0, 0, Scale(440), Scale(300)};
+    RECT rect = {0, 0, Scale(440), Scale(340)};
     AdjustWindowRectEx(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE, 0);
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;

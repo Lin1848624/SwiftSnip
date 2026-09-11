@@ -20,6 +20,7 @@ inline constexpr UINT WM_APP_OPEN_SETTINGS = WM_APP + 2;
 // 全局热键 ID
 inline constexpr int kHotkeyIdRegion = 1;
 inline constexpr int kHotkeyIdFullscreen = 2;
+inline constexpr int kHotkeyIdScroll = 3;
 
 // 托盘菜单命令
 inline constexpr int kCmdCaptureRegion = 1001;
@@ -28,7 +29,7 @@ inline constexpr int kCmdOpenSaveDir = 1003;
 inline constexpr int kCmdOpenSettings = 1004;
 inline constexpr int kCmdAbout = 1005;
 inline constexpr int kCmdExit = 1006;
+inline constexpr int kCmdCaptureScroll = 1007;
 
 // 资源 ID
 inline constexpr int kIconResourceId = 101;
-

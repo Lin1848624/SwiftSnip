@@ -28,6 +28,7 @@ cl /nologo /std:c++17 /utf-8 /O2 /MT /W4 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0
    /Fobuild\ /Fe"build\SwiftSnip.exe" ^
    src\main.cpp src\dpi.cpp src\settings.cpp src\hotkey.cpp src\tray.cpp ^
    src\capture.cpp src\png_writer.cpp src\autostart.cpp src\overlay.cpp src\settings_win.cpp ^
+   src\scroll_capture.cpp ^
    build\app.res ^
    /link /SUBSYSTEM:WINDOWS /MACHINE:X64 /MANIFEST:NO ^
    user32.lib gdi32.lib shell32.lib shlwapi.lib ole32.lib oleaut32.lib ^

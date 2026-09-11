@@ -217,6 +217,11 @@ void Settings::Load() {
         m_data.fullscreenHotkey = parsed;
     }
 
+    GetPrivateProfileStringW(L"Hotkeys", L"Scroll", L"Ctrl+Alt+S", buffer, 512, path.c_str());
+    if (HotkeyFromString(buffer, &parsed)) {
+        m_data.scrollHotkey = parsed;
+    }
+
     GetPrivateProfileStringW(L"General", L"SaveDir", L"", buffer, 512, path.c_str());
     m_data.saveDir = buffer;
 
@@ -238,6 +243,7 @@ void Settings::Save() const {
 
     WritePrivateProfileStringW(L"Hotkeys", L"Region", HotkeyToString(m_data.regionHotkey).c_str(), path.c_str());
     WritePrivateProfileStringW(L"Hotkeys", L"Fullscreen", HotkeyToString(m_data.fullscreenHotkey).c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Hotkeys", L"Scroll", HotkeyToString(m_data.scrollHotkey).c_str(), path.c_str());
     WritePrivateProfileStringW(L"General", L"SaveDir", m_data.saveDir.c_str(), path.c_str());
     WritePrivateProfileStringW(L"General", L"FullscreenScope",
                                m_data.fullscreenScope == FullscreenScope::AllMonitors ? L"1" : L"0", path.c_str());

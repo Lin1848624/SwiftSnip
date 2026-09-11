@@ -13,6 +13,7 @@
 #include "hotkey.h"
 #include "overlay.h"
 #include "png_writer.h"
+#include "scroll_capture.h"
 #include "settings.h"
 #include "settings_win.h"
 #include "tray.h"
@@ -51,13 +52,13 @@ std::wstring FileNameOf(const std::wstring& path) {
     return position == std::wstring::npos ? path : path.substr(position + 1);
 }
 
-// 生成不重名的输出路径：SwiftSnip_yyyyMMdd_HHmmss.png
-std::wstring MakeOutputPath(const std::wstring& dir) {
+// 生成不重名的输出路径：SwiftSnip_yyyyMMdd_HHmmss.png（长图为 SwiftSnip_Long_ 前缀）
+std::wstring MakeOutputPath(const std::wstring& dir, bool longImage) {
     SYSTEMTIME time = {};
     GetLocalTime(&time);
     wchar_t name[128] = {};
-    swprintf_s(name, L"SwiftSnip_%04d%02d%02d_%02d%02d%02d", time.wYear, time.wMonth, time.wDay, time.wHour,
-               time.wMinute, time.wSecond);
+    swprintf_s(name, L"%s%04d%02d%02d_%02d%02d%02d", longImage ? L"SwiftSnip_Long_" : L"SwiftSnip_", time.wYear,
+               time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
 
     const std::wstring prefix = dir + L"\\" + name;
     std::wstring path = prefix + L".png";
@@ -70,7 +71,7 @@ std::wstring MakeOutputPath(const std::wstring& dir) {
 }
 
 // 保存截图并给出气泡提示；无论成败都释放位图
-void SaveCapturedImage(CapturedImage& image) {
+void SaveCapturedImage(CapturedImage& image, bool longImage) {
     if (!image.Valid()) {
         return;
     }
@@ -82,7 +83,7 @@ void SaveCapturedImage(CapturedImage& image) {
         return;
     }
 
-    const std::wstring path = MakeOutputPath(dir);
+    const std::wstring path = MakeOutputPath(dir, longImage);
     std::wstring error;
     if (SaveBitmapAsPng(image.bitmap, path, &error)) {
         TrayShowBalloon(L"截图已保存", FileNameOf(path) + L"（" + std::to_wstring(image.width) + L" × " +
@@ -97,7 +98,7 @@ void SaveCapturedImage(CapturedImage& image) {
 }
 
 void CaptureFullscreenAndSave() {
-    if (IsRegionCaptureActive()) {
+    if (IsRegionCaptureActive() || IsScrollCaptureActive()) {
         return;
     }
 
@@ -109,10 +110,59 @@ void CaptureFullscreenAndSave() {
         TrayShowBalloon(L"截图失败", L"无法捕获屏幕内容。");
         return;
     }
-    SaveCapturedImage(image);
+    SaveCapturedImage(image, false);
 }
 
 void CaptureRegionAndSave() {
+    if (IsRegionCaptureActive() || IsScrollCaptureActive()) {
+        return;
+    }
+    if (IsSettingsWindowOpen()) {
+        CloseSettingsWindow();
+    }
+
+    CapturedImage fullScreen;
+    if (!CaptureVirtualScreen(&fullScreen)) {
+        TrayShowBalloon(L"截图失败", L"无法捕获屏幕内容。");
+        return;
+    }
+
+    const bool started = StartRegionCapture(g_mainWnd, fullScreen, true,
+                                            [](CapturedImage result, const RegionSelection&) {
+        if (result.Valid()) {
+            SaveCapturedImage(result, false);
+        }
+    });
+    if (!started) {
+        // 启动失败时所有权仍在本函数，需要自行释放
+        fullScreen.Release();
+        TrayShowBalloon(L"截图失败", L"无法启动区域选择。");
+    }
+}
+
+// 启动滚动捕获会话
+void StartScrollSession(const RECT& region) {
+    ScrollCaptureOptions options;
+    options.region = region;
+
+    const bool started = StartScrollCapture(g_mainWnd, options, [](CapturedImage image) {
+        if (image.Valid()) {
+            SaveCapturedImage(image, true);
+        } else {
+            TrayShowBalloon(L"长截图结束", L"未检测到可滚动内容。");
+        }
+    });
+    if (!started) {
+        TrayShowBalloon(L"长截图失败", L"无法启动滚动捕获。");
+    }
+}
+
+// 长截图：先选区域，再自动滚动捕获；进行中再次触发则停止并保存
+void CaptureScrollAndSave() {
+    if (IsScrollCaptureActive()) {
+        StopScrollCapture();
+        return;
+    }
     if (IsRegionCaptureActive()) {
         return;
     }
@@ -126,15 +176,17 @@ void CaptureRegionAndSave() {
         return;
     }
 
-    const bool started = StartRegionCapture(g_mainWnd, fullScreen, [](CapturedImage result) {
-        if (result.Valid()) {
-            SaveCapturedImage(result);
-        }
-    });
+    const bool started = StartRegionCapture(
+        g_mainWnd, fullScreen, false, [](CapturedImage, const RegionSelection& selection) {
+            if (selection.screenRect.right > selection.screenRect.left &&
+                selection.screenRect.bottom > selection.screenRect.top) {
+                TrayShowBalloon(L"长截图进行中", L"正在自动滚动捕获，按 Esc 或再次按热键结束。");
+                StartScrollSession(selection.screenRect);
+            }
+        });
     if (!started) {
-        // 启动失败时所有权仍在本函数，需要自行释放
         fullScreen.Release();
-        TrayShowBalloon(L"截图失败", L"无法启动区域选择。");
+        TrayShowBalloon(L"长截图失败", L"无法启动区域选择。");
     }
 }
 
@@ -156,6 +208,9 @@ void HandleTrayMenu() {
     switch (command) {
         case kCmdCaptureRegion:
             CaptureRegionAndSave();
+            break;
+        case kCmdCaptureScroll:
+            CaptureScrollAndSave();
             break;
         case kCmdCaptureFullscreen:
             CaptureFullscreenAndSave();
@@ -184,7 +239,13 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                 CaptureRegionAndSave();
             } else if (wparam == kHotkeyIdFullscreen) {
                 CaptureFullscreenAndSave();
+            } else if (wparam == kHotkeyIdScroll) {
+                CaptureScrollAndSave();
             }
+            return 0;
+
+        case WM_TIMER:
+            ScrollCaptureHandleTimerMessage();
             return 0;
 
         case WM_APP_TRAY: {
@@ -203,6 +264,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
 
         case WM_DESTROY:
             CancelRegionCapture();
+            CancelScrollCapture();
             CloseSettingsWindow();
             UnregisterAppHotkeys(hwnd);
             TrayShutdown();
@@ -244,12 +306,14 @@ int RunCheckHotkeys(const std::wstring& logPath) {
     const AppSettings& settings = Settings::Instance().Get();
     const bool region = IsHotkeyAvailable(settings.regionHotkey);
     const bool fullscreen = IsHotkeyAvailable(settings.fullscreenHotkey);
+    const bool scroll = IsHotkeyAvailable(settings.scrollHotkey);
 
     std::wstring log = L"region(" + HotkeyToString(settings.regionHotkey) + L")=" + (region ? L"OK" : L"BUSY") +
                        L"\nfullscreen(" + HotkeyToString(settings.fullscreenHotkey) + L")=" +
-                       (fullscreen ? L"OK" : L"BUSY") + L"\n";
+                       (fullscreen ? L"OK" : L"BUSY") + L"\nscroll(" + HotkeyToString(settings.scrollHotkey) +
+                       L")=" + (scroll ? L"OK" : L"BUSY") + L"\n";
     WriteUtf8File(logPath, log);
-    return (region && fullscreen) ? 0 : 1;
+    return (region && fullscreen && scroll) ? 0 : 1;
 }
 
 }  // namespace

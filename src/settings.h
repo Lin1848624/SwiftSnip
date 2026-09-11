@@ -21,6 +21,7 @@ enum class FullscreenScope : int {
 struct AppSettings {
     HotkeyConfig regionHotkey{MOD_CONTROL | MOD_ALT, 'A'};
     HotkeyConfig fullscreenHotkey{MOD_CONTROL | MOD_ALT, 'F'};
+    HotkeyConfig scrollHotkey{MOD_CONTROL | MOD_ALT, 'S'};
     std::wstring saveDir;  // 为空时使用默认目录
     FullscreenScope fullscreenScope = FullscreenScope::Primary;
     bool autoStart = false;
@@ -54,4 +55,3 @@ private:
 
     AppSettings m_data;
 };
-

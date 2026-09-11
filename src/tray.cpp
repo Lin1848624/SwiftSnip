@@ -73,8 +73,10 @@ UINT TrayShowContextMenu(HWND hwnd) {
     }
 
     const std::wstring regionText = L"区域截图(&A)\t" + HotkeyToString(settings.regionHotkey);
+    const std::wstring scrollText = L"长截图(&L)\t" + HotkeyToString(settings.scrollHotkey);
     const std::wstring fullscreenText = L"全屏截图(&F)\t" + HotkeyToString(settings.fullscreenHotkey);
     AppendMenuW(menu, MF_STRING, kCmdCaptureRegion, regionText.c_str());
+    AppendMenuW(menu, MF_STRING, kCmdCaptureScroll, scrollText.c_str());
     AppendMenuW(menu, MF_STRING, kCmdCaptureFullscreen, fullscreenText.c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCmdOpenSaveDir, L"打开保存目录(&O)");
@@ -102,4 +104,3 @@ void TraySetTooltip(const std::wstring& text) {
     wcsncpy_s(nid.szTip, text.c_str(), _TRUNCATE);
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
-
