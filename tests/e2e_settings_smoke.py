@@ -55,6 +55,7 @@ try:
     controls = {
         "hotkey region button": 3001,
         "hotkey fullscreen button": 3002,
+        "hotkey scroll button": 3010,
         "save dir edit": 3003,
         "browse button": 3004,
         "scope combo": 3005,
