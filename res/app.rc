@@ -8,8 +8,8 @@
 
 // 版本信息（使用 ASCII 文本以避开 rc.exe 代码页差异）
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION 1,1,0,0
+ PRODUCTVERSION 1,1,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -22,11 +22,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "SwiftSnip"
             VALUE "FileDescription", "SwiftSnip - lightweight screenshot tool"
-            VALUE "FileVersion", "1.0.0"
+            VALUE "FileVersion", "1.1.0"
             VALUE "InternalName", "SwiftSnip"
             VALUE "OriginalFilename", "SwiftSnip.exe"
             VALUE "ProductName", "SwiftSnip"
-            VALUE "ProductVersion", "1.0.0"
+            VALUE "ProductVersion", "1.1.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -34,4 +34,3 @@ BEGIN
         VALUE "Translation", 0x804, 1200
     END
 END
-

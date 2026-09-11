@@ -9,7 +9,7 @@
 // 应用标识
 inline constexpr wchar_t kAppName[] = L"瞬截";
 inline constexpr wchar_t kAppId[] = L"SwiftSnip";
-inline constexpr wchar_t kAppVersion[] = L"1.0.0";
+inline constexpr wchar_t kAppVersion[] = L"1.1.0";
 
 // 窗口类名
 inline constexpr wchar_t kMainWndClass[] = L"SwiftSnipMainWnd";
