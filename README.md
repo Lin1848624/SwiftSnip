@@ -67,12 +67,25 @@ build.bat
 
 ## 自检与测试
 
+程序内建：
+
 | 命令 | 用途 |
 | --- | --- |
 | `SwiftSnip.exe --selftest <png路径>` | 捕获主显示器并保存，日志写入 `<png路径>.log` |
 | `SwiftSnip.exe --check-hotkeys <log路径>` | 检测当前配置的热键是否被占用 |
 | `python tests/verify_capture.py <png> [宽 高]` | 解析 PNG，校验尺寸且非纯色 |
 | `python tools/make_icon.py` | 重新生成多尺寸图标 |
+
+端到端脚本（依赖 Pillow；会拉起真实程序，运行前请先手动退出已启动的实例）：
+
+| 脚本 | 用途 |
+| --- | --- |
+| `tests/e2e_region_capture.py` | 热键 → 遮罩 → 拖拽 → Enter → 校验输出 400×200 PNG |
+| `tests/e2e_config_test.py` | 写入自定义配置（热键/保存目录）验证读取与落盘，结束后恢复默认配置 |
+| `tests/e2e_settings_smoke.py` | 验证单实例唤起设置窗口及 9 个控件 |
+| `tests/e2e_leak_test.py` | 300 次遮罩创建/取消，检查 GDI/USER 对象与内存是否泄漏 |
+| `tests/e2e_measure_perf.py` | 冷启动耗时与常驻内存 |
+| `tests/e2e_measure_overlay.py` | 热键到遮罩可见的延迟 |
 
 ## 实测性能（Windows 10 / 1920×1080 / Release x64）
 
