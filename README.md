@@ -133,3 +133,9 @@ build.bat
 
 - 设计规格：`docs/superpowers/specs/2026-09-11-swiftsnip-design.md`
 - 实现计划：`docs/superpowers/plans/2026-09-11-swiftsnip-mvp.md`
+
+## 许可证
+
+本项目采用 [GNU General Public License v3.0](LICENSE) 发布，SPDX 标识：`GPL-3.0-or-later`。
+
+Copyright (C) 2026 Lin1848624
